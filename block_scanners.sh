@@ -255,12 +255,22 @@ load_entries() {
 
     if [[ "$line" == *:* ]]; then
       ((DRY_RUN)) && echo "[dry-run] ipv6 -> $line" && { ((v6_count++)); continue; }
-      ipset add "$IPSET_V6" "$line" -exist
-      ((v6_count++))
+      set +e
+      ipset add "$IPSET_V6" "$line" -exist 2>/dev/null
+      ipset_result=$?
+      set -e
+      if [[ $ipset_result -eq 0 ]]; then
+        ((v6_count++))
+      fi
     else
       ((DRY_RUN)) && echo "[dry-run] ipv4 -> $line" && { ((v4_count++)); continue; }
-      ipset add "$IPSET_V4" "$line" -exist
-      ((v4_count++))
+      set +e
+      ipset add "$IPSET_V4" "$line" -exist 2>/dev/null
+      ipset_result=$?
+      set -e
+      if [[ $ipset_result -eq 0 ]]; then
+        ((v4_count++))
+      fi
     fi
   done < "$LIST_FILE"
 
@@ -323,19 +333,44 @@ main() {
     flush_ipset "$IPSET_V6"
   fi
 
-  load_entries
+  echo "[+] Loading IP addresses into ipset..."
+  if ! load_entries; then
+    echo "[!] Failed to load entries into ipset" >&2
+    exit 1
+  fi
+  echo "[+] IP addresses loaded successfully"
 
   # Check if xt_set module is loaded (required for ipset with iptables)
+  echo "[+] Checking xt_set module..."
   if ! lsmod | grep -q "^xt_set"; then
     echo "[+] Loading xt_set module for ipset support..."
-    modprobe xt_set 2>/dev/null || echo "[!] Warning: Could not load xt_set module. Rules may not work properly."
+    set +e
+    modprobe xt_set 2>/dev/null
+    modprobe_result=$?
+    set -e
+    if [[ $modprobe_result -ne 0 ]]; then
+      echo "[!] Warning: Could not load xt_set module. Rules may not work properly."
+    else
+      echo "[+] xt_set module loaded successfully"
+    fi
+  else
+    echo "[+] xt_set module is already loaded"
   fi
 
   echo "[+] Creating iptables rules..."
+  set +e
   ensure_chain iptables "$CHAIN_V4" "$IPSET_V4" "$RATE_LIMIT" "$LOGTAG"
+  ipv4_result=$?
   ensure_chain ip6tables "$CHAIN_V6" "$IPSET_V6" "$RATE_LIMIT" "$LOGTAG"
+  ipv6_result=$?
+  set -e
 
-  echo "[+] Rules active. Verify with: iptables -L $CHAIN_V4 -n && ip6tables -L $CHAIN_V6 -n"
+  if [[ $ipv4_result -eq 0 ]] && [[ $ipv6_result -eq 0 ]]; then
+    echo "[+] Rules active. Verify with: iptables -L $CHAIN_V4 -n && ip6tables -L $CHAIN_V6 -n"
+  else
+    echo "[!] Some rules failed to apply. Check errors above."
+    exit 1
+  fi
 }
 
 main "$@"
