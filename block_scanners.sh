@@ -220,44 +220,45 @@ check_ssh_security() {
 
 ensure_chain() {
   local table_bin="$1" chain="$2" set_name="$3" limit="$4" logtag="$5"
-
-  echo "[+] Setting up $chain chain for $table_bin..."
+  local created=0
 
   if ! $table_bin -nL "$chain" >/dev/null 2>&1; then
-    echo "[+] Creating chain $chain..."
     $table_bin -N "$chain" || {
       echo "[!] Failed to create chain $chain" >&2
       return 1
     }
+    created=1
   fi
 
   if ! $table_bin -C INPUT -j "$chain" >/dev/null 2>&1; then
-    echo "[+] Adding $chain to INPUT chain..."
     $table_bin -I INPUT 1 -j "$chain" || {
       echo "[!] Failed to add $chain to INPUT" >&2
       return 1
     }
+    created=1
   fi
 
   if ! $table_bin -C "$chain" -m set --match-set "$set_name" src \
        -m limit --limit "$limit" -j LOG --log-prefix "$logtag " >/dev/null 2>&1; then
-    echo "[+] Adding LOG rule to $chain..."
     $table_bin -A "$chain" -m set --match-set "$set_name" src \
       -m limit --limit "$limit" -j LOG --log-prefix "$logtag " || {
       echo "[!] Failed to add LOG rule to $chain" >&2
       return 1
     }
+    created=1
   fi
 
   if ! $table_bin -C "$chain" -m set --match-set "$set_name" src -j DROP >/dev/null 2>&1; then
-    echo "[+] Adding DROP rule to $chain..."
     $table_bin -A "$chain" -m set --match-set "$set_name" src -j DROP || {
       echo "[!] Failed to add DROP rule to $chain" >&2
       return 1
     }
+    created=1
   fi
 
-  echo "[+] Chain $chain configured successfully"
+  if [[ $created -eq 1 ]]; then
+    echo "[+] $chain configured"
+  fi
 }
 
 parse_args() {
@@ -307,7 +308,6 @@ sync_list() {
   curl -fsSL "$LIST_URL" -o "${LIST_FILE}.tmp"
   if [[ -f "${LIST_FILE}.tmp" ]]; then
     mv "${LIST_FILE}.tmp" "$LIST_FILE"
-    echo "[+] Blocklist saved to $LIST_FILE"
   else
     echo "[!] Failed to download blocklist" >&2
     exit 1
@@ -395,8 +395,6 @@ main() {
     else
       echo "[!] Could not determine package manager for fail2ban, skipping..."
     fi
-  else
-    echo "[+] fail2ban is already installed"
   fi
 
   ensure_ipset "$IPSET_V4" inet
@@ -409,8 +407,6 @@ main() {
     echo "[+] Flushing existing ipset entries"
     flush_ipset "$IPSET_V4"
     flush_ipset "$IPSET_V6"
-  else
-    echo "[+] Adding new entries to existing ipset (preserving custom entries if any)"
   fi
 
   echo "[+] Loading IP addresses into ipset..."
@@ -418,26 +414,19 @@ main() {
     echo "[!] Failed to load entries into ipset" >&2
     exit 1
   fi
-  echo "[+] IP addresses loaded successfully"
 
   # Check if xt_set module is loaded (required for ipset with iptables)
-  echo "[+] Checking xt_set module..."
   if ! lsmod | grep -q "^xt_set"; then
-    echo "[+] Loading xt_set module for ipset support..."
+    echo "[+] Loading xt_set module..."
     set +e
     modprobe xt_set 2>/dev/null
     modprobe_result=$?
     set -e
     if [[ $modprobe_result -ne 0 ]]; then
       echo "[!] Warning: Could not load xt_set module. Rules may not work properly."
-    else
-      echo "[+] xt_set module loaded successfully"
     fi
-  else
-    echo "[+] xt_set module is already loaded"
   fi
 
-  echo "[+] Creating iptables rules..."
   set +e
   ensure_chain iptables "$CHAIN_V4" "$IPSET_V4" "$RATE_LIMIT" "$LOGTAG"
   ipv4_result=$?
@@ -446,7 +435,7 @@ main() {
   set -e
 
   if [[ $ipv4_result -eq 0 ]] && [[ $ipv6_result -eq 0 ]]; then
-    echo "[+] Rules active. Verify with: iptables -L $CHAIN_V4 -n && ip6tables -L $CHAIN_V6 -n"
+    echo "[+] Blocking rules active"
   else
     echo "[!] Some rules failed to apply. Check errors above."
     exit 1
