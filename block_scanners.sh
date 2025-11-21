@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
 # Detect if script is run via curl|bash
 # When run via pipe, BASH_SOURCE[0] is usually /dev/fd/XX or empty
 if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ -f "${BASH_SOURCE[0]}" ]] && [[ "${BASH_SOURCE[0]}" != *"/dev/fd/"* ]]; then
@@ -155,6 +161,61 @@ ensure_ipset() {
 flush_ipset() {
   local name="$1"
   ipset flush "$name"
+}
+
+check_ssh_security() {
+  echo ""
+  echo "[+] Checking SSH security configuration..."
+  
+  local sshd_config="/etc/ssh/sshd_config"
+  local issues_found=0
+  
+  if [[ ! -f "$sshd_config" ]]; then
+    echo -e "${YELLOW}[!] SSH config file not found: $sshd_config${NC}"
+    return 0
+  fi
+  
+  # Check PermitRootLogin
+  if grep -qE "^[^#]*PermitRootLogin\s+yes" "$sshd_config" 2>/dev/null; then
+    echo -e "${RED}[!] SECURITY ISSUE: Root login via SSH is ENABLED${NC}"
+    echo -e "${RED}    Recommendation: Set 'PermitRootLogin no' in $sshd_config${NC}"
+    ((issues_found++))
+  elif grep -qE "^[^#]*PermitRootLogin\s+no" "$sshd_config" 2>/dev/null; then
+    echo -e "${GREEN}[+] Root login via SSH is DISABLED (secure)${NC}"
+  else
+    echo -e "${YELLOW}[!] PermitRootLogin not explicitly set (default may allow root login)${NC}"
+    echo -e "${YELLOW}    Recommendation: Add 'PermitRootLogin no' to $sshd_config${NC}"
+  fi
+  
+  # Check PasswordAuthentication
+  if grep -qE "^[^#]*PasswordAuthentication\s+yes" "$sshd_config" 2>/dev/null; then
+    echo -e "${RED}[!] SECURITY ISSUE: Password authentication is ENABLED${NC}"
+    echo -e "${RED}    Recommendation: Set 'PasswordAuthentication no' and use SSH keys${NC}"
+    ((issues_found++))
+  elif grep -qE "^[^#]*PasswordAuthentication\s+no" "$sshd_config" 2>/dev/null; then
+    echo -e "${GREEN}[+] Password authentication is DISABLED (secure, using SSH keys)${NC}"
+  else
+    echo -e "${YELLOW}[!] PasswordAuthentication not explicitly set (default is yes)${NC}"
+    echo -e "${YELLOW}    Recommendation: Set 'PasswordAuthentication no' to $sshd_config${NC}"
+  fi
+  
+  # Check PubkeyAuthentication
+  if grep -qE "^[^#]*PubkeyAuthentication\s+no" "$sshd_config" 2>/dev/null; then
+    echo -e "${RED}[!] SECURITY ISSUE: Public key authentication is DISABLED${NC}"
+    echo -e "${RED}    Recommendation: Enable 'PubkeyAuthentication yes'${NC}"
+    ((issues_found++))
+  elif grep -qE "^[^#]*PubkeyAuthentication\s+yes" "$sshd_config" 2>/dev/null; then
+    echo -e "${GREEN}[+] Public key authentication is ENABLED (secure)${NC}"
+  fi
+  
+  if [[ $issues_found -eq 0 ]]; then
+    echo -e "${GREEN}[+] SSH configuration looks secure${NC}"
+  else
+    echo ""
+    echo -e "${RED}[!] Found $issues_found security issue(s) in SSH configuration${NC}"
+    echo -e "${YELLOW}[!] After fixing, restart SSH: systemctl restart sshd${NC}"
+  fi
+  echo ""
 }
 
 ensure_chain() {
@@ -390,6 +451,9 @@ main() {
     echo "[!] Some rules failed to apply. Check errors above."
     exit 1
   fi
+  
+  # Check SSH security configuration
+  check_ssh_security
 }
 
 main "$@"
