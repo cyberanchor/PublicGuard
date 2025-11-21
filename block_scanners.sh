@@ -7,8 +7,11 @@ if [[ -n "${BASH_SOURCE[0]:-}" ]] && [[ -f "${BASH_SOURCE[0]}" ]] && [[ "${BASH_
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   RUN_VIA_CURL=0
 else
-  SCRIPT_DIR="/tmp"
+  # Use persistent directory instead of /tmp
+  SCRIPT_DIR="/var/lib/publicguard"
   RUN_VIA_CURL=1
+  # Create directory if it doesn't exist
+  mkdir -p "$SCRIPT_DIR" 2>/dev/null || SCRIPT_DIR="/tmp"
 fi
 
 # GitHub repository (can be overridden via env)
@@ -235,8 +238,19 @@ sync_list() {
   fi
   require_cmd curl
   echo "[+] Downloading blocklist from $LIST_URL"
+  
+  # Ensure directory exists
+  mkdir -p "$(dirname "$LIST_FILE")" 2>/dev/null || true
+  
+  # Download to temp file first, then atomic move
   curl -fsSL "$LIST_URL" -o "${LIST_FILE}.tmp"
-  mv "${LIST_FILE}.tmp" "$LIST_FILE"
+  if [[ -f "${LIST_FILE}.tmp" ]]; then
+    mv "${LIST_FILE}.tmp" "$LIST_FILE"
+    echo "[+] Blocklist saved to $LIST_FILE"
+  else
+    echo "[!] Failed to download blocklist" >&2
+    exit 1
+  fi
 }
 
 load_entries() {
@@ -256,21 +270,21 @@ load_entries() {
     if [[ "$line" == *:* ]]; then
       ((DRY_RUN)) && echo "[dry-run] ipv6 -> $line" && { ((v6_count++)); continue; }
       set +e
+      # -exist flag prevents duplicates - silently skips if IP already exists
       ipset add "$IPSET_V6" "$line" -exist 2>/dev/null
       ipset_result=$?
       set -e
-      if [[ $ipset_result -eq 0 ]]; then
-        ((v6_count++))
-      fi
+      # Count all processed entries (including existing ones - -exist doesn't error)
+      ((v6_count++))
     else
       ((DRY_RUN)) && echo "[dry-run] ipv4 -> $line" && { ((v4_count++)); continue; }
       set +e
+      # -exist flag prevents duplicates - silently skips if IP already exists
       ipset add "$IPSET_V4" "$line" -exist 2>/dev/null
       ipset_result=$?
       set -e
-      if [[ $ipset_result -eq 0 ]]; then
-        ((v4_count++))
-      fi
+      # Count all processed entries (including existing ones - -exist doesn't error)
+      ((v4_count++))
     fi
   done < "$LIST_FILE"
 
@@ -328,9 +342,14 @@ main() {
   ensure_ipset "$IPSET_V6" inet6
 
   if [[ $FLUSH_SETS -eq 1 ]]; then
+    echo "[!] WARNING: Flushing existing ipset entries (this will remove ALL entries including custom ones)"
+    echo "[!] Press Ctrl+C within 5 seconds to cancel..."
+    sleep 5
     echo "[+] Flushing existing ipset entries"
     flush_ipset "$IPSET_V4"
     flush_ipset "$IPSET_V6"
+  else
+    echo "[+] Adding new entries to existing ipset (preserving custom entries if any)"
   fi
 
   echo "[+] Loading IP addresses into ipset..."
