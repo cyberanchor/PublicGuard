@@ -107,7 +107,8 @@ require_cmd() {
   local cmd="$1"
   local pkg="${2:-$cmd}"
   
-  if command -v "$cmd" >/dev/null 2>&1; then
+  # Check if command exists (try multiple methods)
+  if command -v "$cmd" >/dev/null 2>&1 || which "$cmd" >/dev/null 2>&1 || [[ -x "/usr/sbin/$cmd" ]] || [[ -x "/sbin/$cmd" ]]; then
     return 0
   fi
   
@@ -134,14 +135,26 @@ require_cmd() {
       ;;
   esac
   
-  # Verify installation
-  if command -v "$cmd" >/dev/null 2>&1; then
+  # Verify installation - check multiple locations
+  if command -v "$cmd" >/dev/null 2>&1 || which "$cmd" >/dev/null 2>&1; then
+    return 0
+  fi
+  
+  # Check common system paths
+  if [[ -x "/usr/sbin/$cmd" ]] || [[ -x "/sbin/$cmd" ]] || [[ -x "/usr/bin/$cmd" ]]; then
     return 0
   fi
   
   # For fail2ban, check alternative command names
   if [[ "$pkg" == "fail2ban" ]]; then
     if command -v fail2ban-server >/dev/null 2>&1 || command -v fail2ban >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  
+  # For iptables, it might be installed but not in PATH - try to find it
+  if [[ "$cmd" == "iptables" ]] || [[ "$cmd" == "ip6tables" ]]; then
+    if [[ -x "/usr/sbin/$cmd" ]] || [[ -x "/sbin/$cmd" ]]; then
       return 0
     fi
   fi
@@ -377,6 +390,16 @@ main() {
   ensure_root
   
   echo "[+] Checking dependencies..."
+  
+  # Check iptables/ip6tables - they might be in /sbin or /usr/sbin
+  if ! command -v iptables >/dev/null 2>&1; then
+    if [[ -x "/sbin/iptables" ]]; then
+      export PATH="/sbin:$PATH"
+    elif [[ -x "/usr/sbin/iptables" ]]; then
+      export PATH="/usr/sbin:$PATH"
+    fi
+  fi
+  
   require_cmd iptables
   require_cmd ip6tables
   require_cmd ipset
