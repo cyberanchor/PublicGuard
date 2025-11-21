@@ -157,23 +157,43 @@ flush_ipset() {
 ensure_chain() {
   local table_bin="$1" chain="$2" set_name="$3" limit="$4" logtag="$5"
 
+  echo "[+] Setting up $chain chain for $table_bin..."
+
   if ! $table_bin -nL "$chain" >/dev/null 2>&1; then
-    $table_bin -N "$chain"
+    echo "[+] Creating chain $chain..."
+    $table_bin -N "$chain" || {
+      echo "[!] Failed to create chain $chain" >&2
+      return 1
+    }
   fi
 
   if ! $table_bin -C INPUT -j "$chain" >/dev/null 2>&1; then
-    $table_bin -I INPUT 1 -j "$chain"
+    echo "[+] Adding $chain to INPUT chain..."
+    $table_bin -I INPUT 1 -j "$chain" || {
+      echo "[!] Failed to add $chain to INPUT" >&2
+      return 1
+    }
   fi
 
   if ! $table_bin -C "$chain" -m set --match-set "$set_name" src \
        -m limit --limit "$limit" -j LOG --log-prefix "$logtag " >/dev/null 2>&1; then
+    echo "[+] Adding LOG rule to $chain..."
     $table_bin -A "$chain" -m set --match-set "$set_name" src \
-      -m limit --limit "$limit" -j LOG --log-prefix "$logtag "
+      -m limit --limit "$limit" -j LOG --log-prefix "$logtag " || {
+      echo "[!] Failed to add LOG rule to $chain" >&2
+      return 1
+    }
   fi
 
   if ! $table_bin -C "$chain" -m set --match-set "$set_name" src -j DROP >/dev/null 2>&1; then
-    $table_bin -A "$chain" -m set --match-set "$set_name" src -j DROP
+    echo "[+] Adding DROP rule to $chain..."
+    $table_bin -A "$chain" -m set --match-set "$set_name" src -j DROP || {
+      echo "[!] Failed to add DROP rule to $chain" >&2
+      return 1
+    }
   fi
+
+  echo "[+] Chain $chain configured successfully"
 }
 
 parse_args() {
@@ -305,6 +325,13 @@ main() {
 
   load_entries
 
+  # Check if xt_set module is loaded (required for ipset with iptables)
+  if ! lsmod | grep -q "^xt_set"; then
+    echo "[+] Loading xt_set module for ipset support..."
+    modprobe xt_set 2>/dev/null || echo "[!] Warning: Could not load xt_set module. Rules may not work properly."
+  fi
+
+  echo "[+] Creating iptables rules..."
   ensure_chain iptables "$CHAIN_V4" "$IPSET_V4" "$RATE_LIMIT" "$LOGTAG"
   ensure_chain ip6tables "$CHAIN_V6" "$IPSET_V6" "$RATE_LIMIT" "$LOGTAG"
 
