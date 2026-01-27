@@ -187,3 +187,7 @@
 5.101.64.6
 5.101.64.7
 176.32.195.85
+
+
+#  Verein zur Foerderung eines Deutschen Forschungsnetzes e.V. | AS680 | https://www.dfn.de
+139.19.0.0/16
